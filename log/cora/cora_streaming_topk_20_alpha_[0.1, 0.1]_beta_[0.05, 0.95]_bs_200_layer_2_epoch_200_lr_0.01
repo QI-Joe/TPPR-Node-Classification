@@ -1,0 +1,22 @@
+2024-12-27 22:44:35,649 - root - INFO - Namespace(data='cora', bs=200, n_degree=10, n_head=7, n_epoch=200, n_layer=2, lr=0.01, patience=5, n_runs=5, drop_out=0.3, gpu=0, use_memory=True, use_destination_embedding_in_message=False, use_source_embedding_in_message=False, message_function='identity', memory_updater='gru', embedding_module='diffusion', enable_random=False, aggregator='last', save_best=False, tppr_strategy='streaming', topk=20, alpha_list=[0.1, 0.1], beta_list=[0.05, 0.95], ignore_edge_feats=False, ignore_node_feats=False, node_dim=100, time_dim=100, memory_dim=100)
+2024-12-27 22:44:35,651 - fsspec.local - DEBUG - open file: /home/joe/datasets/Citation/cora/processed/data.pt
+2024-12-27 22:44:48,384 - root - INFO - epoch 0 val ap: 0.1521
+2024-12-27 22:44:48,385 - root - INFO - val acc: 0.1521
+2024-12-27 22:44:49,460 - root - INFO - epoch 1 val ap: 0.1521
+2024-12-27 22:44:49,461 - root - INFO - val acc: 0.0971
+2024-12-27 22:44:50,449 - root - INFO - epoch 2 val ap: 0.1658
+2024-12-27 22:44:50,450 - root - INFO - val acc: 0.1132
+2024-12-27 22:44:51,426 - root - INFO - epoch 3 val ap: 0.1521
+2024-12-27 22:44:51,427 - root - INFO - val acc: 0.1716
+2024-12-27 22:44:52,398 - root - INFO - epoch 4 val ap: 0.1521
+2024-12-27 22:44:52,398 - root - INFO - val acc: 0.1716
+2024-12-27 22:44:53,361 - root - INFO - epoch 5 val ap: 0.1521
+2024-12-27 22:44:53,362 - root - INFO - val acc: 0.1716
+2024-12-27 22:44:54,358 - root - INFO - epoch 6 val ap: 0.1521
+2024-12-27 22:44:54,358 - root - INFO - val acc: 0.0971
+2024-12-27 22:44:55,320 - root - INFO - epoch 7 val ap: 0.1521
+2024-12-27 22:44:55,320 - root - INFO - val acc: 0.0971
+2024-12-27 22:44:56,275 - root - INFO - epoch 8 val ap: 0.1521
+2024-12-27 22:44:56,276 - root - INFO - val acc: 0.0971
+2024-12-28 11:07:38,438 - root - INFO - Namespace(data='cora', bs=200, n_degree=10, n_head=7, n_epoch=200, n_layer=2, lr=0.01, patience=5, n_runs=5, drop_out=0.3, gpu=0, use_memory=True, use_destination_embedding_in_message=False, use_source_embedding_in_message=False, message_function='identity', memory_updater='gru', embedding_module='diffusion', enable_random=False, aggregator='last', save_best=False, tppr_strategy='streaming', topk=20, alpha_list=[0.1, 0.1], beta_list=[0.05, 0.95], ignore_edge_feats=False, ignore_node_feats=False, node_dim=100, time_dim=100, memory_dim=100)
+2024-12-28 11:07:38,440 - fsspec.local - DEBUG - open file: /home/joe/datasets/Citation/cora/processed/data.pt

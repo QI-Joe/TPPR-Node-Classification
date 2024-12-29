@@ -1,5 +1,8 @@
-Zebra: When Temporal Graph Neural Networks Meet Temporal Personalized PageRank
-=============================================================================
+Zebra on Node Classification Task
+====================================
+
+Modified based on Zebra originaledge prediction task. Currently only changed output head from edge to node
+the method of node classification head is simple modification
 
 ## Dataset
 6 datasets were used in this paper:

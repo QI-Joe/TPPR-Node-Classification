@@ -6,6 +6,7 @@ import math
 import time
 from model.temporal_attention import TemporalAttentionLayer
 from numba import njit
+import copy
 
 
 @njit
@@ -135,6 +136,37 @@ class GraphDiffusionEmbedding(GraphEmbedding):
   def streaming_topk(self,source_nodes, timestamps, edge_idxs):
     return self.tppr_finder.streaming_topk(source_nodes,timestamps,edge_idxs)
 
+  def streaming_topk_node(self,source_nodes, timestamps, edge_idxs):
+    return self.tppr_finder.streaming_topk_modified(source_nodes, timestamps, edge_idxs)
+
+  def node_last_timestamp(self, source_nodes, timestamps):
+    edge_length = source_nodes.shape[0]
+    timestamps = np.concatenate((timestamps, timestamps), axis=0)
+
+    node_time_hashtable: dict[int, float] = {}
+    for node, tmp in zip(source_nodes, timestamps):
+      if node in node_time_hashtable.keys():
+        node_time_hashtable[node] = tmp if tmp > node_time_hashtable[node] else node_time_hashtable[node]
+      else:
+        node_time_hashtable[node] = tmp
+    return node_time_hashtable
+
+  def streaming_topk_extraction(self, source_node: np.ndarray, timestamps):
+    """
+    to align with processing in node classification, here the negative sampling part will be suspend
+    """
+    node_len = len(source_node)
+    
+    # TODO: first update
+    # self.tppr_finder.streaming_topk_modified(source_nodes=source_node, timestamps=timestamps, edge_idxs=edge_idxs)
+
+    # TODO: A method to keep every nodes last timestamp 
+    timetable = self.node_last_timestamp(source_node, copy.deepcopy(timestamps))
+    sorted_timetable = dict(sorted(timetable.items()))
+    node_timestamp = np.array(sorted_timetable.values())
+
+    sample_node = list(set(source_node))
+    return self.tppr_finder.single_extraction(sample_node, node_timestamp)
 
   def streaming_topk_no_fake(self,source_nodes, timestamps, edge_idxs):
     return self.tppr_finder.streaming_topk_no_fake(source_nodes,timestamps,edge_idxs)
@@ -287,6 +319,71 @@ class GraphDiffusionEmbedding(GraphEmbedding):
       embeddings = torch.cat((embeddings,neighbor_embeddings),dim=1)
 
     return embeddings
+
+  def compute_embedding_tppr_node(self, memory, source_nodes, timestamps, memory_updater, train):
+    """
+    The difference is, source_nodes here is entire node list instead of edges, be aware that edge_idxs may 
+    not be used
+    """
+    source_nodes=np.array(source_nodes,dtype=np.int32)
+    t=time.time()
+    selected_node_list, selected_edge_idxs_list, selected_delta_time_list, selected_weight_list=\
+      self.streaming_topk_extraction(source_nodes, timestamps)  
+         
+    self.t_tppr+=time.time()-t
+
+    if train:
+      memory_nodes=np.hstack(selected_node_list)
+      index = numba_unique(memory_nodes)
+      memory,_=memory_updater.get_updated_memory(memory,index) 
+
+    self.average_topk=np.mean(np.sum(selected_weight_list[0],axis=1))
+
+    ### transfer from CPU to GPU
+    for i in range(self.n_tppr):
+      selected_node_list[i] = torch.from_numpy(selected_node_list[i]).long().to(self.device,non_blocking=True)
+      selected_edge_idxs_list[i] = torch.from_numpy(selected_edge_idxs_list[i]).long().to(self.device,non_blocking=True)
+      selected_delta_time_list[i] = torch.from_numpy(selected_delta_time_list[i]).float().to(self.device,non_blocking=True)
+      selected_weight_list[i] = torch.from_numpy(selected_weight_list[i]).float().to(self.device,non_blocking=True)
+
+    ### transform source embeddings
+    nodes_0 = source_nodes
+    nodes_0 = torch.from_numpy(nodes_0).long().to(self.device)
+    source_embeddings = memory[nodes_0]
+    source_embeddings=self.transform_source(source_embeddings)
+
+    ### get neighbor embeddings
+    embeddings=source_embeddings
+    for index,selected_nodes in enumerate(selected_node_list):
+
+      # node features
+      node_features = memory[selected_nodes]
+
+      # edge features
+      selected_edge_idxs=selected_edge_idxs_list[index]
+      edge_features = self.edge_features[selected_edge_idxs, :] 
+  
+      # time encoding
+      selected_delta_time=selected_delta_time_list[index]
+      time_embeddings = self.time_encoder(selected_delta_time)
+
+      # concat and transform
+      neighbor_embeddings = torch.cat([node_features,edge_features,time_embeddings], dim=-1)
+      neighbor_embeddings=self.transform(neighbor_embeddings) # [600, X]
+
+      # normalize the weights here, very important step!
+      weights=selected_weight_list[index]
+      weights_sum=torch.sum(weights,dim=1)
+      weights=weights/weights_sum.unsqueeze(1)
+      weights[weights_sum==0]=0
+
+      ### concat source embeddings, and neighbor embeddings obtained by different diffusion models
+      neighbor_embeddings=neighbor_embeddings*weights[:,:,None]
+      neighbor_embeddings=torch.sum(neighbor_embeddings,dim=1)
+      embeddings = torch.cat((embeddings,neighbor_embeddings),dim=1)
+
+    return embeddings
+
 
   def pruning_topk(self,source_nodes, timestamps):
     n_nodes=len(source_nodes)

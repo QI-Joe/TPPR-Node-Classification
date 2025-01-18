@@ -444,7 +444,9 @@ class tppr_finder:
     self.PPR_list = self.val_PPR_list.copy()
 
 
-  def extract_streaming_tppr(self,tppr,current_timestamp,k,node_list,edge_idxs_list,delta_time_list,weight_list,position):
+  def extract_streaming_tppr(self, tppr, current_timestamp: float, k: int, 
+                             node_list, edge_idxs_list, delta_time_list, weight_list, \
+                             position):
 
     if len(tppr)!=0:
       tmp_nodes=np.zeros(k,dtype=np.int32)
@@ -555,7 +557,7 @@ class tppr_finder:
           else:
             keys = list(t_s1_PPR.keys())
             values = np.array(list(t_s1_PPR.values()))
-            inds = np.argsort(values)[-self.k:]
+            inds = np.argsort(values)[-self.k:] # ensure sorting is descending
             for ind in inds:
               key=keys[ind]
               value=values[ind]
@@ -578,8 +580,125 @@ class tppr_finder:
 
     return batch_node_list,batch_edge_idxs_list,batch_delta_time_list,batch_weight_list
 
+  def streaming_topk_modified(self, source_nodes, timestamps, edge_idxs) -> None:
+        n_edges=len(source_nodes) // 2
+        
 
+        ###########  enumerate tppr models ###########
+        for index0,alpha in enumerate(self.alpha_list):
+            beta = self.beta_list[index0]
+            inter_norm_list= self.norm_list[index0]
+            inter_PPR_list= self.PPR_list[index0]
 
+        ###########  enumerate edge interactions ###########
+            for i in range(n_edges):
+                source=source_nodes[i]
+                target=source_nodes[i+n_edges]
+                # fake=source_nodes[i+2*n_edges]
+                timestamp=timestamps[i]
+                edge_idx=edge_idxs[i]
+                pairs=[(source,target),(target,source)] if source!=target else [(source,target)]
+                
+                if not (i+1)%1000: print(f"node updated to {i+1} edges")
+                ############# ! then update the PPR values here #############
+                for index,pair in enumerate(pairs):
+                    s1=pair[0]
+                    s2=pair[1]
+
+                    ################# s1 side #################
+                    if inter_norm_list[s1]==0:
+                        t_s1_PPR = nb.typed.Dict.empty(
+                                        key_type=self.nb_key_type,
+                                        value_type=types.float64,
+                                    )
+                        scale_s2=1-alpha
+                    else:
+                        t_s1_PPR = inter_PPR_list[s1].copy()
+                        last_norm= inter_norm_list[s1]
+                        new_norm=last_norm*beta+beta
+                        scale_s1=last_norm/new_norm*beta
+                        scale_s2=beta/new_norm*(1-alpha)
+
+                        # tppr neighbor residual propagator
+                        for key, value in t_s1_PPR.items():
+                            t_s1_PPR[key]=value*scale_s1     
+
+                    ################# s2 side #################
+                    if inter_norm_list[s2]==0:
+                        t_s1_PPR[(edge_idx,s2,timestamp)]=scale_s2*alpha if alpha!=0 else scale_s2
+                    else:
+                        s2_PPR = inter_PPR_list[s2]
+                        for key, value in s2_PPR.items():
+                            if key in t_s1_PPR:
+                                t_s1_PPR[key]+=value*scale_s2
+                            else:
+                                t_s1_PPR[key]=value*scale_s2
+                
+                        new_key = (edge_idx,s2,timestamp)
+                        t_s1_PPR[new_key]=scale_s2*alpha if alpha!=0 else scale_s2
+
+                    ####### exract the top-k items ########
+                    updated_tppr=nb.typed.Dict.empty(
+                        key_type=self.nb_key_type,
+                        value_type=types.float64
+                    )
+
+                    tppr_size=len(t_s1_PPR)
+                    if tppr_size<= self.k:
+                        updated_tppr=t_s1_PPR
+                    else:
+                        keys = list(t_s1_PPR.keys())
+                        values = np.array(list(t_s1_PPR.values()))
+                        inds = np.argsort(values)[-self.k:]
+                        for ind in inds:
+                            key=keys[ind]
+                            value=values[ind]
+                            updated_tppr[key]=value
+
+                    if index==0:
+                        new_s1_PPR=updated_tppr
+                    else:
+                        new_s2_PPR=updated_tppr
+
+                ####### update PPR_list and norm_list #######
+                if source!=target:
+                    inter_PPR_list[source]=new_s1_PPR
+                    inter_PPR_list[target]=new_s2_PPR
+                    inter_norm_list[source]=inter_norm_list[source]*beta+beta
+                    inter_norm_list[target]=inter_norm_list[target]*beta+beta
+                else:
+                    inter_PPR_list[source]=new_s1_PPR
+                    inter_norm_list[source]=inter_norm_list[source]*beta+beta
+        return 
+
+  def single_extraction(self, source_nodes, timestamps)->tuple[list[np.ndarray]]:
+        n_edges = len(source_nodes) // 2
+        n_nodes = len(source_nodes)
+
+        batch_node_list = []
+        batch_edge_idxs_list = []
+        batch_delta_time_list = []
+        batch_weight_list = []
+
+        for _ in range(self.n_tppr):
+            batch_node_list.append(np.zeros((n_nodes, self.k), dtype=np.int32)) 
+            batch_edge_idxs_list.append(np.zeros((n_nodes, self.k), dtype=np.int32)) 
+            batch_delta_time_list.append(np.zeros((n_nodes, self.k), dtype=np.float32)) 
+            batch_weight_list.append(np.zeros((n_nodes, self.k), dtype=np.float32)) 
+        
+        for index0, alpha in enumerate(self.alpha_list):
+            inter_PPR_list= self.PPR_list[index0]
+
+            for i in range(n_edges):
+                source=source_nodes[i]
+                target=source_nodes[i+n_edges]
+                timestamp=timestamps[i]
+
+                ########### ! first extract the top-k neighbors and fill the list ###########
+                self.extract_streaming_tppr(inter_PPR_list[source], timestamp, self.k, batch_node_list[index0], batch_edge_idxs_list[index0], batch_delta_time_list[index0], batch_weight_list[index0],i)
+                self.extract_streaming_tppr(inter_PPR_list[target], timestamp, self.k, batch_node_list[index0],batch_edge_idxs_list[index0],batch_delta_time_list[index0],batch_weight_list[index0],i+n_edges)
+        
+        return batch_node_list, batch_edge_idxs_list, batch_delta_time_list, batch_weight_list 
 
   def single_streaming_topk(self,source_nodes, timestamps, edge_idxs,tppr_id):
     n_edges=len(source_nodes)//3

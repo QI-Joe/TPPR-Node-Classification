@@ -153,7 +153,7 @@ class TGN(torch.nn.Module):
     negative_node_embedding = node_embedding[2 * n_samples:]
 
     if train: # update memory without gradients
-      self.update_memory(self.memory,unique_positives) 
+      self.update_memory(self.memory, unique_positives) 
       self.memory.clear_messages(unique_positives)
 
     with torch.no_grad(): # collect raw messages
@@ -168,11 +168,37 @@ class TGN(torch.nn.Module):
       self.memory.store_raw_messages(unique_sources, source_messages, source_edge_times)
 
     if not train: # update memory without gradients
-      self.update_memory(self.memory,unique_positives)
+      self.update_memory(self.memory, unique_positives)
       self.memory.clear_messages(unique_positives)
 
     return source_node_embedding, destination_node_embedding, negative_node_embedding
 
+
+  def compute_temporal_node_embeddings(self, source_nodes, destination_nodes, edge_times, train):
+
+    self.batch_counter+=1
+    positives = np.concatenate([source_nodes, destination_nodes])
+    unique_positives = np.unique(positives)
+    self.n_update_memory+=len(positives)
+
+
+    if train:
+        memory = self.memory
+        self.test_mode=False
+    else:
+      if self.test_mode is False:
+        self.update_memory_in_test(self.memory)
+        self.test_mode=True
+      memory = self.memory.memory
+
+    
+    node_embedding = self.embedding_module.compute_embedding_tppr_node(memory=memory, source_nodes=positives, timestamps=edge_times, \
+                                                                       memory_updater = self.memory_updater,train=train)
+
+    self.update_memory(self.memory, unique_positives) 
+    self.memory.clear_messages(unique_positives)
+
+    return node_embedding
 
 
   def compute_edge_probabilities(self, source_nodes, destination_nodes, negative_nodes, edge_times,edge_idxs, n_neighbors,train):
@@ -187,13 +213,10 @@ class TGN(torch.nn.Module):
     neg_score = score[n_samples:]
     return pos_score.sigmoid(), neg_score.sigmoid()
   
-  def compute_node_probabilities(self, source_nodes, destination_nodes, negative_nodes, edge_times,edge_idxs, n_neighbors,train):
+  def compute_node_probabilities(self, source_nodes, destination_nodes, edge_times, train):
     #### compute temporal embedding ####
-    n_samples = len(source_nodes)
-    embeds = self.compute_temporal_embeddings(source_nodes, destination_nodes, negative_nodes, edge_times, edge_idxs, n_neighbors,train)
-    node_embedding = torch.concat(embeds, dim=0)
-
-    return node_embedding.sigmoid()
+    embeds: torch.Tensor = self.compute_temporal_node_embeddings(source_nodes, destination_nodes, edge_times, train)
+    return embeds.sigmoid()
 
 
   def update_memory(self, memory, positives):

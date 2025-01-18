@@ -9,9 +9,8 @@ import numpy as np
 from pathlib import Path
 from evaluation.evaluation import eval_edge_prediction, eval_node_classification, LogRegression
 from model.tgn_model import TGN
-from utils.util import EarlyStopMonitor, RandEdgeSampler, get_neighbor_finder
+from utils.util import EarlyStopMonitor, RandEdgeSampler, get_neighbor_finder, Running_Permit
 from utils.data_processing import get_data_TPPR
-from tqdm import tqdm
 from sklearn.metrics import average_precision_score, roc_auc_score, accuracy_score
 from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning, NumbaTypeSafetyWarning
 from utils.my_dataloader import to_cuda, Temporal_Splitting, Temporal_Dataloader, data_load
@@ -132,7 +131,7 @@ training_strategy = "node"
 NODE_DIM = round_list[0][0].node_feat.shape[1]
 
 all_run_times = time.time()
-for i in range(1):
+for i in range(3):
 
   full_data, train_data, val_data, test_data, n_nodes, n_edges = round_list[i]
   num_classes = np.max(full_data.labels)+1
@@ -151,9 +150,9 @@ for i in range(1):
 
   train_ngh_finder = get_neighbor_finder(train_data)
   full_ngh_finder = get_neighbor_finder(full_data)
-  train_rand_sampler = RandEdgeSampler(train_data.sources, train_data.destinations)
-  val_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=0)
-  test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
+  # train_rand_sampler = RandEdgeSampler(train_data.sources, train_data.destinations)
+  # val_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=0)
+  # test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
 
   tgn = TGN(neighbor_finder=train_ngh_finder, node_features=node_feats, edge_features=edge_feats, device=device,
             n_layers=NUM_LAYER,n_heads=NUM_HEADS, dropout=DROP_OUT, use_memory=USE_MEMORY,
@@ -181,6 +180,15 @@ for i in range(1):
   t_total_tppr=0
   stop_epoch=-1
 
+  embedding_module = tgn.embedding_module
+
+  print(f"the embedding module is {tgn.embedding_module_type}")
+
+  train_src = np.concatenate([train_data.sources, train_data.destinations])
+  timestamps_train = np.concatenate([train_data.timestamps, train_data.timestamps])
+
+  embedding_module.streaming_topk_node(source_nodes=train_src, timestamps=timestamps_train, edge_idxs=train_data.edge_idxs)
+
   train_tppr_time=[]
   tppr_filled = False
 
@@ -197,59 +205,30 @@ for i in range(1):
     train_loss=[]
 
     tgn.memory.__init_memory__()
-    if args.tppr_strategy=='streaming':
-      tgn.embedding_module.reset_tppr()
+    # if args.tppr_strategy=='streaming':
+    #   tgn.embedding_module.reset_tppr()
     tgn.set_neighbor_finder(train_ngh_finder)
 
-
     # model training
-    for batch_idx in range(0, num_batch):
-      start_idx = batch_idx * BATCH_SIZE
-      end_idx = min(num_instance, start_idx + BATCH_SIZE)
-      sample_inds=np.array(list(range(start_idx,end_idx)))
-      sources_batch, destinations_batch = train_data.sources[sample_inds],train_data.destinations[sample_inds]
-      edge_idxs_batch = train_data.edge_idxs[sample_inds]
-      timestamps_batch = train_data.timestamps[sample_inds]
-      size = len(sources_batch)
-      _, negatives_batch = train_rand_sampler.sample(size)
+    tgn = tgn.train()
+    optimizer.zero_grad()
 
-      with torch.no_grad():
-        pos_label = torch.ones(size, dtype=torch.float, device=device)
-        neg_label = torch.zeros(size, dtype=torch.float, device=device)
+    node_emb = tgn.compute_node_probabilities(NUM_NEIGHBORS, train=True)
+    node_emb = projector.forward(node_emb)
+    
+    labels = train_data.labels
+    labels_on_GPU = torch.tensor(labels).to(device)
+    loss = criterion_node(node_emb, labels_on_GPU)
+    
+    loss.backward()
+    optimizer.step()
 
-      tgn = tgn.train()
-      optimizer.zero_grad()
+    train_loss.append(loss.item())
 
-      if training_strategy == "link":
-        pos_prob, neg_prob = tgn.compute_edge_probabilities(sources_batch, destinations_batch, negatives_batch,timestamps_batch, edge_idxs_batch, NUM_NEIGHBORS, train=True)
-        loss = criterion(pos_prob.squeeze(), pos_label) + criterion(neg_prob.squeeze(), neg_label)
-      elif training_strategy == "node":
-        node_emb = tgn.compute_node_probabilities(sources_batch, destinations_batch, negatives_batch,timestamps_batch, edge_idxs_batch, NUM_NEIGHBORS, train=True)
-        node_emb = projector.forward(node_emb)
-        all_nodes = np.hstack([sources_batch, destinations_batch, negatives_batch])
-        labels = train_data.labels[all_nodes]
-        labels_on_GPU = torch.tensor(labels).to(device)
-        loss = criterion_node(node_emb, labels_on_GPU)
-      loss.backward()
-      optimizer.step()
-
-      train_loss.append(loss.item())
-
-      with torch.no_grad():
-        if training_strategy == "link":
-          pos_prob=pos_prob.cpu().numpy() 
-          neg_prob=neg_prob.cpu().numpy() 
-          pred_score = np.concatenate([pos_prob, neg_prob]) 
-          true_label = np.concatenate([np.ones(size), np.zeros(size)])  
-          true_binary_label= np.zeros(size)
-          pred_binary_label = np.argmax(np.hstack([pos_prob,neg_prob]),axis=1) 
-          train_ap.append(average_precision_score(true_label, pred_score))
-          train_auc.append(roc_auc_score(true_label, pred_score))
-          train_acc.append(accuracy_score(true_binary_label, pred_binary_label))
-        elif training_strategy == "node":
-          node_pred = node_emb.argmax(-1).cpu().numpy()
-          train_ap.append(average_precision_score(labels.reshape(-1,1), node_pred.reshape(-1,1)))
-          train_acc.append(accuracy_score(labels, node_pred))
+    with torch.no_grad():
+      node_pred = node_emb.argmax(-1).cpu().numpy()
+      train_ap.append(average_precision_score(labels.reshape(-1,1), node_pred.reshape(-1,1)))
+      train_acc.append(accuracy_score(labels, node_pred))
       print(f"(TPPR) | epoch {epoch} train ACC {train_acc[-1]:.5f}, train AP {train_ap[-1]:.5f}, Loss: {loss.item():.4f}")
 
     if (epoch+1) % 50 == 0:

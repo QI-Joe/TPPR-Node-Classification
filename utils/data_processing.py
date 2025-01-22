@@ -5,6 +5,7 @@ import pandas as pd
 import os
 from utils.my_dataloader import data_load, Temporal_Splitting, Temporal_Dataloader
 import torch
+import copy
 
 class Data:
   def __init__(self, sources, destinations, timestamps, edge_idxs, labels, node_feat: np.ndarray = None):
@@ -96,6 +97,8 @@ def get_data_TPPR(dataset_name, snapshot):
         graph_list = Temporal_Splitting(graph).temporal_splitting(time_mode="view", \
                     snapshot=snapshot, views=snapshot-2, strategy="sequential", non_split=non_split)
     
+    graph_num_node, graph_feat, edge_number = graph.x.shape[0], copy.deepcopy(graph.pos), graph.edge_index.shape[1]
+
     TPPR_list: list[list[Data]] = []
     lenth = len(graph_list)
     single_graph = False
@@ -103,7 +106,7 @@ def get_data_TPPR(dataset_name, snapshot):
         lenth = 2
         single_graph = True
 
-    for idxs in range(0, lenth-1):
+    for idxs in range(0, lenth):
         # covert Temproal_graph object to Data object
         items = graph_list[idxs]
         items.edge_attr = items.edge_attr # .numpy()
@@ -113,7 +116,7 @@ def get_data_TPPR(dataset_name, snapshot):
         t_labels = items.y
         full_data = to_TPPR_Data(items)
         timestamp = full_data.timestamps
-        val_time, test_time = np.quantile(timestamp, (0.20, 0.60))
+        val_time, test_time = np.quantile(timestamp, (0.85, 1.00))
 
         train_mask = timestamp <= val_time
         val_mask = (timestamp > val_time) & (val_time<=test_time)
@@ -124,7 +127,7 @@ def get_data_TPPR(dataset_name, snapshot):
         val_data = Data(full_data.sources[val_mask], full_data.destinations[val_mask], full_data.timestamps[val_mask],\
                         full_data.edge_idxs[val_mask], t_labels, full_data.node_feat)
         
-        if single_graph:
+        if single_graph or idxs == lenth-1:
             test_data = val_data
         else:
             test = graph_list[idxs+1]
@@ -135,7 +138,7 @@ def get_data_TPPR(dataset_name, snapshot):
         TPPR_list.append([full_data, train_data, val_data, test_data, node_num, node_edges])
 
 
-    return TPPR_list
+    return TPPR_list, graph_num_node, graph_feat, edge_number
 
 # path = "data/mooc/ml_mooc.npy"
 # edge = np.load(path)

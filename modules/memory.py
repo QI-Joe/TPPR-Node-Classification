@@ -6,7 +6,7 @@ import numpy as np
 
 class Memory(nn.Module):
 
-  def __init__(self, n_nodes, memory_dimension, input_dimension, message_dimension=None, device="cpu", combination_method='sum'):
+  def __init__(self, n_nodes, memory_dimension, input_dimension, node_fea: torch.Tensor, message_dimension=None, device="cpu", combination_method='sum'):
     super(Memory, self).__init__()
     self.n_nodes = n_nodes
     self.memory_dimension = memory_dimension
@@ -14,10 +14,15 @@ class Memory(nn.Module):
     self.message_dimension = message_dimension
     self.device = device
     self.combination_method = combination_method
+    self.node_feature = node_fea
     self.__init_memory__()
 
   def __init_memory__(self):
-    self.memory = torch.zeros((self.n_nodes, self.memory_dimension)).to(self.device)
+    assert self.memory_dimension == self.node_feature.shape[1], f"node_feature {self.node_feature.shape[1]} and feature memory bank {self.memory_dimension} not equal."
+
+    self.memory = self.node_feature.to(torch.float32).to(self.device)   # torch.zeros((self.n_nodes, self.memory_dimension)).to(self.device)
+    dim_negative = torch.zeros((1, self.node_feature.shape[1])).to(self.device)
+    self.memory = torch.concat((self.memory, dim_negative), dim=0)
     self.last_update = torch.zeros(self.n_nodes).to(self.device)
 
     self.nodes = np.zeros(self.n_nodes,dtype=bool)

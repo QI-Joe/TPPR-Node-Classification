@@ -68,39 +68,25 @@ def eval_edge_prediction(model, negative_edge_sampler, data, n_neighbors, batch_
 
 
 
-def eval_node_classification(tgn: TGN, num_classes, decoder, data, batch_size, n_neighbors):
-  pred_prob = np.zeros((len(data.sources), num_classes))
-  num_instance = len(data.sources)
-  num_batch = math.ceil(num_instance / batch_size)
+def eval_node_classification(tgn: TGN, decoder: LogRegression, val_src, val_edge_time, val_data):
+  val_sample = np.array(list(set(val_src)))
+
 
   with torch.no_grad():
     decoder.eval()
     tgn.eval()
-    for k in range(num_batch):
-      s_idx = k * batch_size
-      e_idx = min(num_instance, s_idx + batch_size)
 
-      sources_batch = data.sources[s_idx: e_idx]
-      destinations_batch = data.destinations[s_idx: e_idx]
-      timestamps_batch = data.timestamps[s_idx:e_idx]
-      edge_idxs_batch = data.edge_idxs[s_idx: e_idx]
+    val_emb = tgn.compute_node_probabilities(sources=val_src, edge_times=val_edge_time, train=False)
+    val_pred: torch.Tensor = decoder.forward(val_emb)
 
+  if isinstance(val_data.labels, list):
+    val_data.labels = np.array(val_data.labels)
+  val_label = val_data.labels[val_sample].reshape(-1,1)
 
-      source_embedding, destination_embedding, _ = tgn.compute_temporal_embeddings(sources_batch,
-                                                                                   destinations_batch,
-                                                                                   destinations_batch,
-                                                                                   timestamps_batch,
-                                                                                   edge_idxs_batch,
-                                                                                   n_neighbors,train=False)
-      pred_prob_batch = decoder(source_embedding).sigmoid()
-      pred_prob[s_idx: e_idx] = pred_prob_batch.cpu().numpy()
+  val_pred = val_pred.cpu().numpy()
+  pred_prob = np.argmax(val_pred, axis=-1).reshape(-1,1)
 
-  val_label = data.labels[data.sources].reshape(-1,1)
-  pred_prob = np.argmax(pred_prob, axis=-1).reshape(-1,1)
-
-  anchor_mask = node_index_anchoring(data.sources).numpy()
-  anchor_node_acc = accuracy_score(val_label[anchor_mask], pred_prob[anchor_mask])
   # auc_roc = roc_auc_score(val_label, pred_prob, multi_class="ovr")
   acc = accuracy_score(val_label, pred_prob)
   prec = average_precision_score(val_label, pred_prob)
-  return anchor_node_acc, acc, prec
+  return acc, prec

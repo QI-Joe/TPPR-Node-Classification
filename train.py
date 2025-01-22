@@ -9,7 +9,7 @@ import numpy as np
 from pathlib import Path
 from evaluation.evaluation import eval_edge_prediction, eval_node_classification, LogRegression
 from model.tgn_model import TGN
-from utils.util import EarlyStopMonitor, RandEdgeSampler, get_neighbor_finder, Running_Permit
+from utils.util import EarlyStopMonitor, RandEdgeSampler, get_neighbor_finder
 from utils.data_processing import get_data_TPPR
 from sklearn.metrics import average_precision_score, roc_auc_score, accuracy_score
 from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning, NumbaTypeSafetyWarning
@@ -28,11 +28,11 @@ parser.add_argument('-d', '--data', type=str, help='Dataset name (eg. wikipedia 
 parser.add_argument('--bs', type=int, default=200, help='Batch_size')
 parser.add_argument('--n_degree', type=int, default=10, help='Number of neighbors to sample')
 parser.add_argument('--n_head', type=int, default=7, help='Number of heads used in attention layer')
-parser.add_argument('--n_epoch', type=int, default=200, help='Number of epochs')
+parser.add_argument('--n_epoch', type=int, default=30, help='Number of epochs')
 parser.add_argument('--n_layer', type=int, default=2, help='Number of network layers')
 parser.add_argument('--lr', type=float, default=1e-2, help='Learning rate')
 parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping')
-parser.add_argument('--n_runs', type=int, default=5, help='Number of runs')
+parser.add_argument('--n_runs', type=int, default=8, help='Number of runs')
 parser.add_argument('--drop_out', type=float, default=0.3, help='Dropout probability')
 parser.add_argument('--gpu', type=int, default=0, help='Idx for the gpu to use')
 parser.add_argument('--use_memory', default=True, type=bool, help='Whether to augment the model with a node memory')
@@ -123,7 +123,7 @@ logger.addHandler(fh)
 logger.addHandler(ch)
 logger.info(args)
 
-round_list = get_data_TPPR(DATA, snapshot=args.n_runs)
+round_list, graph_num, graph_feature, edge_num = get_data_TPPR(DATA, snapshot=args.n_runs)
 
 device_string = 'cuda:{}'.format(GPU) if torch.cuda.is_available() else 'cpu'
 device = torch.device(device_string)
@@ -136,11 +136,11 @@ for i in range(3):
   full_data, train_data, val_data, test_data, n_nodes, n_edges = round_list[i]
   num_classes = np.max(full_data.labels)+1
 
-  args.n_nodes = n_nodes +1
-  args.n_edges = n_edges +1
+  args.n_nodes = graph_num +1
+  args.n_edges = edge_num +1
 
   edge_feats = None
-  node_feats = full_data.node_feat
+  node_feats = graph_feature
   node_feat_dims = full_data.node_feat.shape[1]
 
   if edge_feats is None or args.ignore_edge_feats: 
@@ -153,6 +153,7 @@ for i in range(3):
   # train_rand_sampler = RandEdgeSampler(train_data.sources, train_data.destinations)
   # val_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=0)
   # test_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations, seed=2)
+  val_tppr_backup = float(0)
 
   tgn = TGN(neighbor_finder=train_ngh_finder, node_features=node_feats, edge_features=edge_feats, device=device,
             n_layers=NUM_LAYER,n_heads=NUM_HEADS, dropout=DROP_OUT, use_memory=USE_MEMORY,
@@ -167,7 +168,6 @@ for i in range(3):
             args=args)
   
   projector = LogRegression(in_channels=128*3, num_classes=num_classes).to(device)
-  # decoder = LogRegression(in_channels=node_feat_dims*3, num_classes=num_classes).to(device)
 
   criterion = torch.nn.BCELoss()
   criterion_node = torch.nn.CrossEntropyLoss(reduction="mean")
@@ -205,18 +205,18 @@ for i in range(3):
     train_loss=[]
 
     tgn.memory.__init_memory__()
-    # if args.tppr_strategy=='streaming':
-    #   tgn.embedding_module.reset_tppr()
     tgn.set_neighbor_finder(train_ngh_finder)
 
     # model training
     tgn = tgn.train()
     optimizer.zero_grad()
 
-    node_emb = tgn.compute_node_probabilities(NUM_NEIGHBORS, train=True)
+    node_emb = tgn.compute_node_probabilities(sources=train_src, edge_times=timestamps_train, train=True)
     node_emb = projector.forward(node_emb)
     
-    labels = train_data.labels
+    sample_node = np.array(list(set(train_src)))
+
+    labels = train_data.labels[sample_node]
     labels_on_GPU = torch.tensor(labels).to(device)
     loss = criterion_node(node_emb, labels_on_GPU)
     
@@ -231,7 +231,7 @@ for i in range(3):
       train_acc.append(accuracy_score(labels, node_pred))
       print(f"(TPPR) | epoch {epoch} train ACC {train_acc[-1]:.5f}, train AP {train_ap[-1]:.5f}, Loss: {loss.item():.4f}")
 
-    if (epoch+1) % 50 == 0:
+    if (epoch+1) % 15 == 0:
       epoch_tppr_time = tgn.embedding_module.t_tppr
       train_tppr_time.append(epoch_tppr_time)
 
@@ -243,35 +243,35 @@ for i in range(3):
       train_loss=np.mean(train_loss)
 
       # change the tppr finder to validation and test
-      if args.tppr_strategy=='streaming':
-        tgn.embedding_module.reset_tppr()
-        tgn.embedding_module.fill_tppr(train_data.sources, train_data.destinations, train_data.timestamps, train_data.edge_idxs, tppr_filled)
-        tppr_filled = True
-      tgn.set_neighbor_finder(full_ngh_finder)
+      # if args.tppr_strategy=='streaming':
+      #   tgn.embedding_module.reset_tppr()
+      #   tgn.embedding_module.fill_tppr(train_data.sources, train_data.destinations, train_data.timestamps, train_data.edge_idxs, tppr_filled)
+      #   tppr_filled = True
+      # tgn.set_neighbor_finder(full_ngh_finder)
 
       ########################  Model Validation on the Val Dataset #######################
       t_epoch_val_start=time.time()
-      ### transductive val
+      ### validation isolation, to cut off edge that gonna update during validation and later restore to train mode
       train_memory_backup = tgn.memory.backup_memory()
+      train_tppr_backup = None
       if args.tppr_strategy=='streaming':
         train_tppr_backup = tgn.embedding_module.backup_tppr()
 
-      val_anchor_acc, val_acc, val_ap = eval_node_classification(tgn=tgn, decoder = projector, data = val_data, num_classes=num_classes, n_neighbors=NUM_NEIGHBORS, batch_size=BATCH_SIZE)
-      # val_ap, val_auc, val_acc = eval_edge_prediction(model=tgn,negative_edge_sampler=val_rand_sampler,data=val_data,n_neighbors=NUM_NEIGHBORS,batch_size=BATCH_SIZE)
+      ### Frist, update the validation T-PPR ###
+      val_source = np.concatenate([val_data.sources, val_data.destinations])
+      val_timestamps = np.concatenate([val_data.timestamps, val_data.timestamps])
+      if val_tppr_backup == 0:
+        embedding_module.streaming_topk_node(source_nodes=val_source, timestamps=val_timestamps, edge_idxs=val_data.edge_idxs)
+      else:
+        embedding_module.restore_tppr(val_tppr_backup)
 
-      val_memory_backup = tgn.memory.backup_memory()
-      if args.tppr_strategy=='streaming':
-        val_tppr_backup = tgn.embedding_module.backup_tppr()
+      val_acc, val_ap = eval_node_classification(tgn=tgn, decoder = projector, val_data = val_data, val_src=val_source,\
+                                                  val_edge_time=val_timestamps)
+      
+      val_tppr_backup = embedding_module.backup_tppr()
+
       tgn.memory.restore_memory(train_memory_backup)
-      if args.tppr_strategy=='streaming':
-        tgn.embedding_module.restore_tppr(train_tppr_backup)
-
-      ### inductive val
-      # nn_val_ap, nn_val_auc, nn_val_acc = eval_edge_prediction(model=tgn,negative_edge_sampler=val_rand_sampler,data=new_node_val_data,n_neighbors=NUM_NEIGHBORS,batch_size=BATCH_SIZE)
-      # tgn.memory.restore_memory(val_memory_backup)
-      # if args.tppr_strategy=='streaming':
-      #   tgn.embedding_module.restore_tppr(val_tppr_backup)
-
+      embedding_module.restore_tppr(train_tppr_backup)
 
       epoch_val_time = time.time() - t_epoch_val_start
       t_total_epoch_val += epoch_val_time
@@ -279,23 +279,23 @@ for i in range(3):
       # logger.info('epoch running time: {}, tppr: {:.4f}, train: {:.4f}, val: {:.4f}'.format(epoch_id, epoch_tppr_time, epoch_train_time, epoch_val_time))
       # logger.info('train auc: {:.4f}, train ap: {:.4f}, train acc: {:.4f}, train loss: {:.4f}'.format(train_auc, train_ap, train_acc, train_loss))
       print('epoch {} val ap: {:.4f}'.format(epoch, val_ap))
-      print('(TPPR) | val acc: {:.4f}, val ancor acc {:.4f}'.format(val_acc, val_anchor_acc))
+      print('(TPPR) | val acc: {:.4f}'.format(val_acc))
 
-    """
-    last_best_epoch=early_stopper.best_epoch
-    if early_stopper.early_stop_check(val_ap):
-      stop_epoch=epoch_id
-      if False:
-        model_parameters,tgn.memory=torch.load(best_checkpoint_path)
-        tgn.load_state_dict(model_parameters)
-        tgn.eval()
-      break
-    else:
-      if epoch==early_stopper.best_epoch:
-        ...
-        # torch.save((tgn.state_dict(),tgn.memory), best_checkpoint_path)
-    """
-  sys.exit(0)
+
+      # val_ap, val_auc, val_acc = eval_edge_prediction(model=tgn,negative_edge_sampler=val_rand_sampler,data=val_data,n_neighbors=NUM_NEIGHBORS,batch_size=BATCH_SIZE)
+      # val_memory_backup = tgn.memory.backup_memory()
+      # if args.tppr_strategy=='streaming':
+      #   val_tppr_backup = tgn.embedding_module.backup_tppr()
+      # tgn.memory.restore_memory(train_memory_backup)
+      # if args.tppr_strategy=='streaming':
+      #   tgn.embedding_module.restore_tppr(train_tppr_backup)
+
+      ### inductive val
+      # nn_val_ap, nn_val_auc, nn_val_acc = eval_edge_prediction(model=tgn,negative_edge_sampler=val_rand_sampler,data=new_node_val_data,n_neighbors=NUM_NEIGHBORS,batch_size=BATCH_SIZE)
+      # tgn.memory.restore_memory(val_memory_backup)
+      # if args.tppr_strategy=='streaming':
+      #   tgn.embedding_module.restore_tppr(val_tppr_backup)
+
   ######################  Evaludate Model on the Test Dataset #######################
   t_test_start=time.time()
 
@@ -304,22 +304,29 @@ for i in range(3):
   if args.tppr_strategy=='streaming':
     val_tppr_backup = tgn.embedding_module.backup_tppr()
 
-  test_ap, test_auc, test_acc = eval_edge_prediction(model=tgn,negative_edge_sampler=test_rand_sampler,data=test_data,n_neighbors=NUM_NEIGHBORS,batch_size=BATCH_SIZE)
+
+  tgn.embedding_module.reset_tppr() # reset tppr to all 0
+  test_source = np.concatenate([test_data.sources, test_data.destinations])
+  test_timestamps = np.concatenate([test_data.timestamps, test_data.timestamps])
+  embedding_module.streaming_topk_node(source_nodes=test_source, timestamps=test_timestamps, edge_idxs=test_data.edge_idxs)
+
+  test_acc, test_ap = eval_node_classification(tgn=tgn, decoder = projector, val_data = test_data, val_src=test_source,\
+                                                  val_edge_time=test_timestamps)
 
   tgn.memory.restore_memory(val_memory_backup)
   if args.tppr_strategy=='streaming':
     tgn.embedding_module.restore_tppr(val_tppr_backup)
 
-  ### inductive test
-  # nn_test_ap, nn_test_auc, nn_test_acc = eval_edge_prediction(model=tgn,negative_edge_sampler= nn_test_rand_sampler, data=new_node_test_data,n_neighbors=NUM_NEIGHBORS,batch_size=BATCH_SIZE)
   t_test=time.time()-t_test_start
 
   train_tppr_time=np.array(train_tppr_time)[1:]
-  NUM_EPOCH=stop_epoch if stop_epoch!=-1 else NUM_EPOCH
-  logger.info(f'### num_epoch {NUM_EPOCH}, epoch_train {round(t_total_epoch_train/NUM_EPOCH, 4)}, epoch_val {round(t_total_epoch_val/NUM_EPOCH, 4)}, epoch_test {round(t_test, 4)}, train_tppr {round(np.mean(train_tppr_time), 4)}')
-  logger.info(f"### all epoch train time {round(t_total_epoch_train, 4)}, entire tppr finder time {round(np.sum(train_tppr_time), 4)}, entire run time without data loading: {round(time.time()-all_run_times, 4)}")
-  
-  logger.info('Test statistics: Old nodes -- auc: {}, ap: {}, acc: {}'.format(test_auc, test_ap, test_acc))
 
-  if not args.save_best:
-    os.remove(best_checkpoint_path)
+  NUM_EPOCH=stop_epoch if stop_epoch!=-1 else NUM_EPOCH
+
+  print(f'### num_epoch time {NUM_EPOCH}, epoch_train time {round(t_total_epoch_train/NUM_EPOCH, 4)}, epoch_val time {round(t_total_epoch_val/NUM_EPOCH, 4)}, epoch_test time {round(t_test, 4)}, train_tppr time {round(np.mean(train_tppr_time), 4)}')
+  print(f"### all epoch train time {round(t_total_epoch_train, 4)}, entire tppr finder time {round(np.sum(train_tppr_time), 4)}, entire run time without data loading: {round(time.time()-all_run_times, 4)}")
+  print('Test statistics: Old nodes -- ap: {}, acc: {}'.format(test_ap, test_acc))
+
+
+  # if not args.save_best:
+  #   os.remove(best_checkpoint_path)

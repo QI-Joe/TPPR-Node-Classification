@@ -121,7 +121,7 @@ class GraphDiffusionEmbedding(GraphEmbedding):
     assert(self.k!=0)
 
     if self.tppr_strategy=='streaming':
-      self.tppr_finder=tppr_finder(self.num_nodes,self.k,self.n_tppr,self.alpha_list,self.beta_list)
+      self.tppr_finder=tppr_finder(self.num_nodes, self.k, self.n_tppr, self.alpha_list, self.beta_list)
 
   def reset_tppr(self):
     self.tppr_finder.reset_tppr()
@@ -129,7 +129,7 @@ class GraphDiffusionEmbedding(GraphEmbedding):
   def backup_tppr(self):
     return self.tppr_finder.backup_tppr()
 
-  def restore_tppr(self,backup):
+  def restore_tppr(self, backup):
     self.tppr_finder.restore_tppr(backup)
 
 
@@ -141,7 +141,6 @@ class GraphDiffusionEmbedding(GraphEmbedding):
 
   def node_last_timestamp(self, source_nodes, timestamps):
     edge_length = source_nodes.shape[0]
-    timestamps = np.concatenate((timestamps, timestamps), axis=0)
 
     node_time_hashtable: dict[int, float] = {}
     for node, tmp in zip(source_nodes, timestamps):
@@ -156,17 +155,16 @@ class GraphDiffusionEmbedding(GraphEmbedding):
     to align with processing in node classification, here the negative sampling part will be suspend
     """
     node_len = len(source_node)
-    
-    # TODO: first update
-    # self.tppr_finder.streaming_topk_modified(source_nodes=source_node, timestamps=timestamps, edge_idxs=edge_idxs)
 
     # TODO: A method to keep every nodes last timestamp 
     timetable = self.node_last_timestamp(source_node, copy.deepcopy(timestamps))
     sorted_timetable = dict(sorted(timetable.items()))
-    node_timestamp = np.array(sorted_timetable.values())
+    node_timestamp = np.array(list(sorted_timetable.values()))
 
     sample_node = list(set(source_node))
-    return self.tppr_finder.single_extraction(sample_node, node_timestamp)
+    assert len(sample_node) == node_timestamp.shape[0], "Sample node and corresponding time stamp is not matched"
+
+    return self.tppr_finder.single_extraction(sample_node, node_timestamp), sample_node
 
   def streaming_topk_no_fake(self,source_nodes, timestamps, edge_idxs):
     return self.tppr_finder.streaming_topk_no_fake(source_nodes,timestamps,edge_idxs)
@@ -325,9 +323,9 @@ class GraphDiffusionEmbedding(GraphEmbedding):
     The difference is, source_nodes here is entire node list instead of edges, be aware that edge_idxs may 
     not be used
     """
-    source_nodes=np.array(source_nodes,dtype=np.int32)
+    source_nodes=np.array(source_nodes, dtype=np.int32)
     t=time.time()
-    selected_node_list, selected_edge_idxs_list, selected_delta_time_list, selected_weight_list=\
+    (selected_node_list, selected_edge_idxs_list, selected_delta_time_list, selected_weight_list), sample_node = \
       self.streaming_topk_extraction(source_nodes, timestamps)  
          
     self.t_tppr+=time.time()-t
@@ -347,7 +345,7 @@ class GraphDiffusionEmbedding(GraphEmbedding):
       selected_weight_list[i] = torch.from_numpy(selected_weight_list[i]).float().to(self.device,non_blocking=True)
 
     ### transform source embeddings
-    nodes_0 = source_nodes
+    nodes_0 = np.array(sample_node)
     nodes_0 = torch.from_numpy(nodes_0).long().to(self.device)
     source_embeddings = memory[nodes_0]
     source_embeddings=self.transform_source(source_embeddings)
@@ -382,7 +380,7 @@ class GraphDiffusionEmbedding(GraphEmbedding):
       neighbor_embeddings=torch.sum(neighbor_embeddings,dim=1)
       embeddings = torch.cat((embeddings,neighbor_embeddings),dim=1)
 
-    return embeddings
+    return embeddings # nxd 
 
 
   def pruning_topk(self,source_nodes, timestamps):

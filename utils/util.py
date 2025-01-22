@@ -388,7 +388,7 @@ spec_tppr_finder = [
 
 
 
-@jitclass(spec_tppr_finder)
+# @jitclass(spec_tppr_finder)
 class tppr_finder:
   def __init__(self,num_nodes,k,n_tppr,alpha_list,beta_list):
     self.num_nodes=num_nodes
@@ -449,7 +449,7 @@ class tppr_finder:
                              position):
 
     if len(tppr)!=0:
-      tmp_nodes=np.zeros(k,dtype=np.int32)
+      tmp_nodes=np.ones(k,dtype=np.int32) * (-1)
       tmp_edge_idxs=np.zeros(k,dtype=np.int32)
       tmp_timestamps=np.zeros(k,dtype=np.float32)
       tmp_weights=np.zeros(k,dtype=np.float32)
@@ -608,7 +608,7 @@ class tppr_finder:
                     ################# s1 side #################
                     if inter_norm_list[s1]==0:
                         t_s1_PPR = nb.typed.Dict.empty(
-                                        key_type=self.nb_key_type,
+                                        key_type=nb_key_type, # from self.nb_key_type to nb_key_type
                                         value_type=types.float64,
                                     )
                         scale_s2=1-alpha
@@ -639,7 +639,7 @@ class tppr_finder:
 
                     ####### exract the top-k items ########
                     updated_tppr=nb.typed.Dict.empty(
-                        key_type=self.nb_key_type,
+                        key_type=nb_key_type,
                         value_type=types.float64
                     )
 

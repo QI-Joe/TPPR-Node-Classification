@@ -10,6 +10,7 @@ from modules.message_function import get_message_function
 from modules.memory_updater import get_memory_updater
 from modules.embedding_module import get_embedding_module
 from model.time_encoding import TimeEncode
+import copy
 
 class TGN(torch.nn.Module):
   def __init__(self, neighbor_finder, node_features, edge_features, device, n_layers=2,
@@ -65,6 +66,7 @@ class TGN(torch.nn.Module):
     self.memory = Memory(n_nodes=self.n_nodes,
                         memory_dimension=self.memory_dimension,
                         input_dimension=message_dimension,
+                        node_fea=node_features,
                         message_dimension=message_dimension,
                         device=device)
 
@@ -174,10 +176,10 @@ class TGN(torch.nn.Module):
     return source_node_embedding, destination_node_embedding, negative_node_embedding
 
 
-  def compute_temporal_node_embeddings(self, source_nodes, destination_nodes, edge_times, train):
+  def compute_temporal_node_embeddings(self, sources, edge_times, train):
 
     self.batch_counter+=1
-    positives = np.concatenate([source_nodes, destination_nodes])
+    positives = copy.deepcopy(sources)
     unique_positives = np.unique(positives)
     self.n_update_memory+=len(positives)
 
@@ -193,7 +195,7 @@ class TGN(torch.nn.Module):
 
     
     node_embedding = self.embedding_module.compute_embedding_tppr_node(memory=memory, source_nodes=positives, timestamps=edge_times, \
-                                                                       memory_updater = self.memory_updater,train=train)
+                                                                       memory_updater = self.memory_updater, train=train)
 
     self.update_memory(self.memory, unique_positives) 
     self.memory.clear_messages(unique_positives)
@@ -213,9 +215,9 @@ class TGN(torch.nn.Module):
     neg_score = score[n_samples:]
     return pos_score.sigmoid(), neg_score.sigmoid()
   
-  def compute_node_probabilities(self, source_nodes, destination_nodes, edge_times, train):
+  def compute_node_probabilities(self, sources, edge_times, train):
     #### compute temporal embedding ####
-    embeds: torch.Tensor = self.compute_temporal_node_embeddings(source_nodes, destination_nodes, edge_times, train)
+    embeds: torch.Tensor = self.compute_temporal_node_embeddings(sources, edge_times, train)
     return embeds.sigmoid()
 
 

@@ -82,6 +82,20 @@ def to_TPPR_Data(graph: Temporal_Dataloader) -> Data:
 
     return TPPR_data
 
+
+def quantile_(threshold: float, timestamps: torch.Tensor) -> tuple[torch.Tensor]:
+  full_length = timestamps.shape[0]
+  val_idx = int(threshold*full_length)
+
+  train_mask = torch.zeros_like(timestamps, dtype=bool)
+  train_mask[:val_idx] = True
+
+  val_mask = torch.zeros_like(timestamps, dtype=bool)
+  val_mask[val_idx:] = True
+
+  return train_mask, val_mask
+
+
 def get_data_TPPR(dataset_name, snapshot):
     r"""
     this function is used to convert the node features to the correct format
@@ -116,10 +130,7 @@ def get_data_TPPR(dataset_name, snapshot):
         t_labels = items.y
         full_data = to_TPPR_Data(items)
         timestamp = full_data.timestamps
-        val_time, test_time = np.quantile(timestamp, (0.85, 1.00))
-
-        train_mask = timestamp <= val_time
-        val_mask = (timestamp > val_time) & (val_time<=test_time)
+        train_mask, val_mask = quantile_(threshold=0.85, timestamps=timestamp)
 
         train_data = Data(full_data.sources[train_mask], full_data.destinations[train_mask], full_data.timestamps[train_mask],\
                         full_data.edge_idxs[train_mask], t_labels, full_data.node_feat)

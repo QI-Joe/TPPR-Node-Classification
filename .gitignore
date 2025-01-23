@@ -4,4 +4,4 @@ __pycache__/
 saved_checkpoints/
 data/
 Zebra_Old/
-*.pyc
+*.cpython-311.pyc

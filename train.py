@@ -24,7 +24,7 @@ warnings.simplefilter('ignore', category=NumbaTypeSafetyWarning)
 
 
 parser = argparse.ArgumentParser('Self-supervised training with diffusion models')
-parser.add_argument('-d', '--data', type=str, help='Dataset name (eg. wikipedia or reddit)',default='cora')
+parser.add_argument('-d', '--data', type=str, help='Dataset name (eg. wikipedia or reddit)',default='dblp')
 parser.add_argument('--bs', type=int, default=200, help='Batch_size')
 parser.add_argument('--n_degree', type=int, default=10, help='Number of neighbors to sample')
 parser.add_argument('--n_head', type=int, default=7, help='Number of heads used in attention layer')
@@ -32,7 +32,7 @@ parser.add_argument('--n_epoch', type=int, default=30, help='Number of epochs')
 parser.add_argument('--n_layer', type=int, default=2, help='Number of network layers')
 parser.add_argument('--lr', type=float, default=1e-2, help='Learning rate')
 parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping')
-parser.add_argument('--n_runs', type=int, default=8, help='Number of runs')
+parser.add_argument('--n_runs', type=int, default=15, help='Number of runs')
 parser.add_argument('--drop_out', type=float, default=0.3, help='Dropout probability')
 parser.add_argument('--gpu', type=int, default=0, help='Idx for the gpu to use')
 parser.add_argument('--use_memory', default=True, type=bool, help='Whether to augment the model with a node memory')
@@ -131,7 +131,7 @@ training_strategy = "node"
 NODE_DIM = round_list[0][0].node_feat.shape[1]
 
 all_run_times = time.time()
-for i in range(3):
+for i in range(1):
 
   full_data, train_data, val_data, test_data, n_nodes, n_edges = round_list[i]
   num_classes = np.max(full_data.labels)+1
